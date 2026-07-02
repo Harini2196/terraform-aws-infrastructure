@@ -1,0 +1,136 @@
+name: Terraform CI/CD
+
+on:
+  push:
+    branches:
+      - 'feature/**'
+  pull_request:
+    types: [closed]
+    branches:
+      - ci
+      - main
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  TF_VERSION: "1.7.5"
+  AWS_REGION: "us-east-1"
+  TF_IN_AUTOMATION: "true"
+
+jobs:
+  environment-setup:
+    name: Determine target environment
+    runs-on: ubuntu-latest
+    # For push events this always runs. For pull_request events, only run when
+    # the PR was actually merged (the "closed" event also fires on a plain close).
+    if: github.event_name == 'push' || github.event.pull_request.merged == true
+    outputs:
+      environment: ${{ steps.set-env.outputs.environment }}
+      tfvars_file: ${{ steps.set-env.outputs.tfvars_file }}
+    steps:
+      - id: set-env
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            echo "environment=dev" >> "$GITHUB_OUTPUT"
+            echo "tfvars_file=tfvars/dev.tfvars" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ github.base_ref }}" == "ci" ]]; then
+            echo "environment=staging" >> "$GITHUB_OUTPUT"
+            echo "tfvars_file=tfvars/stage.tfvars" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ github.base_ref }}" == "main" ]]; then
+            echo "environment=prod" >> "$GITHUB_OUTPUT"
+            echo "tfvars_file=tfvars/prod.tfvars" >> "$GITHUB_OUTPUT"
+          else
+            echo "Unrecognized trigger (base_ref=${{ github.base_ref }}); nothing to deploy." >&2
+            exit 1
+          fi
+
+  plan:
+    name: Terraform Plan (${{ needs.environment-setup.outputs.environment }})
+    needs: environment-setup
+    runs-on: ubuntu-latest
+    concurrency:
+      group: terraform-${{ needs.environment-setup.outputs.environment }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Terraform Init
+        run: terraform init -input=false
+
+      - name: Terraform Workspace
+        run: terraform workspace select -or-create "${{ needs.environment-setup.outputs.environment }}"
+
+      - name: Terraform Format Check
+        run: terraform fmt -check -recursive
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Terraform Plan
+        run: |
+          terraform plan \
+            -input=false \
+            -var-file="${{ needs.environment-setup.outputs.tfvars_file }}" \
+            -out=tfplan
+
+      - name: Upload plan artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan-${{ needs.environment-setup.outputs.environment }}-${{ github.run_id }}
+          path: tfplan
+          retention-days: 5
+
+  apply:
+    name: Terraform Apply (${{ needs.environment-setup.outputs.environment }})
+    needs: [environment-setup, plan]
+    runs-on: ubuntu-latest
+    # Points at a GitHub Environment named dev-apply / staging-apply / prod-apply.
+    # Configure "required reviewers" protection rules on these environments in
+    # repo Settings > Environments so apply only runs after manual approval.
+    environment: ${{ needs.environment-setup.outputs.environment }}-apply
+    concurrency:
+      group: terraform-${{ needs.environment-setup.outputs.environment }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Terraform Init
+        run: terraform init -input=false
+
+      - name: Terraform Workspace
+        run: terraform workspace select -or-create "${{ needs.environment-setup.outputs.environment }}"
+
+      - name: Download plan artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan-${{ needs.environment-setup.outputs.environment }}-${{ github.run_id }}
+
+      - name: Terraform Apply
+        run: terraform apply -input=false -auto-approve tfplan
