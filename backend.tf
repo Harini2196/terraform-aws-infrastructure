@@ -5,9 +5,7 @@ terraform {
   backend "s3" {
     bucket         = "codecloud-terraform-tfstate"
     key            = "terraform.tfstate"
-    use_lockfile   = true
     dynamodb_table = "codecloud-terraform-tfstate-lock"
     region         = "us-east-1"
-    encrypt        = true
   }
 }
