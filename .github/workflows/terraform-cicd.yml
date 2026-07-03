@@ -53,7 +53,7 @@ jobs:
           elif [[ "${{ github.base_ref }}" == "ci" ]]; then
             echo "environment=staging" >> "$GITHUB_OUTPUT"
             echo "tfvars_file=tfvars/stage.tfvars" >> "$GITHUB_OUTPUT"
-          elif [[ "${{ github.base_ref }}" == "main" ]]; then
+          elif [[ "${{ github.base_ref }}" == "master" ]]; then
             echo "environment=prod" >> "$GITHUB_OUTPUT"
             echo "tfvars_file=tfvars/prod.tfvars" >> "$GITHUB_OUTPUT"
           else
