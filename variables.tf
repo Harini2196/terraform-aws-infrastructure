@@ -7,7 +7,7 @@ variable "assume_role_arn" {
 variable "app_name" {
   description = "Application name used as a prefix for resource names and tags"
   type        = string
-  default     = "automationlabcloud"
+  default     = "alb"
 }
 
 variable "environment" {
