@@ -6,6 +6,8 @@ terraform {
     bucket         = "codecloud-terraform-tfstate"
     key            = "terraform.tfstate"
     dynamodb_table = "codecloud-terraform-tfstate-lock"
-    region         = "us-east-1"
+    # lock_table    = true
+    # use_lockfile = true
+    region = "us-east-1"
   }
 }
