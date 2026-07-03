@@ -9,6 +9,20 @@ on:
     branches:
       - ci
       - main
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to destroy'
+        required: true
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+      confirm:
+        description: 'Type the environment name exactly to confirm destruction'
+        required: true
+        type: string
 
 permissions:
   id-token: write
@@ -134,3 +148,64 @@ jobs:
 
       - name: Terraform Apply
         run: terraform apply -input=false -auto-approve tfplan
+
+  destroy:
+    name: Terraform Destroy (${{ inputs.environment }})
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    # Manual-only path. Points at a GitHub Environment named dev-destroy /
+    # staging-destroy / prod-destroy — configure "required reviewers" on
+    # these in repo Settings > Environments so destroy only runs after
+    # manual approval, separate from the apply approvers.
+    environment: ${{ inputs.environment }}-destroy
+    concurrency:
+      group: terraform-${{ inputs.environment }}
+      cancel-in-progress: false
+    steps:
+      - name: Verify confirmation input
+        shell: bash
+        run: |
+          if [[ "${{ inputs.confirm }}" != "${{ inputs.environment }}" ]]; then
+            echo "Confirmation text '${{ inputs.confirm }}' does not match environment '${{ inputs.environment }}'. Aborting." >&2
+            exit 1
+          fi
+
+      - name: Determine tfvars file
+        id: set-env
+        shell: bash
+        run: |
+          case "${{ inputs.environment }}" in
+            dev) echo "tfvars_file=tfvars/dev.tfvars" >> "$GITHUB_OUTPUT" ;;
+            staging) echo "tfvars_file=tfvars/stage.tfvars" >> "$GITHUB_OUTPUT" ;;
+            prod) echo "tfvars_file=tfvars/prod.tfvars" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::211125304367:role/gh-actions-admin-role
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Terraform Init
+        run: terraform init -input=false
+
+      - name: Terraform Workspace
+        run: terraform workspace select "${{ inputs.environment }}"
+
+      - name: Terraform Plan Destroy
+        run: |
+          terraform plan -destroy \
+            -input=false \
+            -var-file="${{ steps.set-env.outputs.tfvars_file }}" \
+            -out=tfplan-destroy
+
+      - name: Terraform Destroy
+        run: terraform apply -input=false -auto-approve tfplan-destroy
